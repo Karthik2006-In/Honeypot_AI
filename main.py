@@ -2,7 +2,7 @@ import re
 from typing import Dict, Any, List
 
 # ----------------------------
-# Simple scam detector
+# Scam keyword dictionary
 # ----------------------------
 SCAM_KEYWORDS = {
     "Bank Phishing": [
@@ -21,6 +21,9 @@ SCAM_KEYWORDS = {
     ]
 }
 
+# ----------------------------
+# Personas
+# ----------------------------
 PERSONAS = {
     "senior_citizen": {
         "system": (
@@ -41,13 +44,11 @@ PERSONAS = {
     }
 }
 
-
 # ----------------------------
-# Extractors (Regex)
+# Regex extractors
 # ----------------------------
 UPI_REGEX = re.compile(r"\b[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}\b")
 BANK_ACC_REGEX = re.compile(r"\b\d{9,18}\b")
-IFSC_REGEX = re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b")
 URL_REGEX = re.compile(r"https?://[^\s]+")
 
 
@@ -55,10 +56,8 @@ def extract_intel(text: str) -> Dict[str, List[str]]:
     upi_ids = list(set(UPI_REGEX.findall(text)))
     urls = list(set(URL_REGEX.findall(text)))
 
-    # Bank account numbers often appear as long digits.
+    # Bank accounts: 9–18 digits
     accounts = list(set(BANK_ACC_REGEX.findall(text)))
-
-    # Filter out OTP-like 4-6 digits, keep only 9-18 digits.
     accounts = [a for a in accounts if len(a) >= 9]
 
     return {
@@ -87,8 +86,8 @@ def classify_scam(message: str) -> str:
 
 def threat_score(message: str) -> int:
     msg = message.lower()
-
     score = 0
+
     if any(w in msg for w in ["blocked", "suspend", "freeze", "urgent", "immediately"]):
         score += 15
     if any(w in msg for w in ["otp", "pin", "password"]):
@@ -102,14 +101,9 @@ def threat_score(message: str) -> int:
 
 
 # ----------------------------
-# Mock conversation engine
+# Agent reply generator
 # ----------------------------
 def generate_agent_reply(persona: str, scam_type: str, last_user_msg: str, turn: int) -> str:
-    """
-    A simple rule-based agent reply generator.
-    (No paid LLM needed)
-    """
-
     if persona == "senior_citizen":
         if turn == 1:
             return "I'm a bit slow with these new smartphones... can you guide me step by step? What should I click exactly?"
@@ -121,7 +115,7 @@ def generate_agent_reply(persona: str, scam_type: str, last_user_msg: str, turn:
             return "I got an OTP message. Should I share it with you to verify? Please confirm."
         return "I am confused. Can you tell me the exact UPI ID or account details I should use to verify?"
 
-    # college_student
+    # college_student persona
     if turn == 1:
         return "Bro I'm in a hurry. Send the exact verification link or UPI ID to finish fast."
     if "upi" in last_user_msg.lower():
@@ -132,7 +126,7 @@ def generate_agent_reply(persona: str, scam_type: str, last_user_msg: str, turn:
 
 
 # ----------------------------
-# MAIN FLOW FUNCTION (used by api.py)
+# MAIN FLOW FUNCTION
 # ----------------------------
 def run_honeypot_flow(initial_message: str) -> Dict[str, Any]:
     scam_type = classify_scam(initial_message)
@@ -140,7 +134,7 @@ def run_honeypot_flow(initial_message: str) -> Dict[str, Any]:
 
     scam_detected = scam_type != "Unknown Scam" or score >= 20
 
-    # Choose persona
+    # Persona selection
     persona_used = "senior_citizen" if scam_detected else "college_student"
     system_prompt = PERSONAS[persona_used]["system"]
 
@@ -149,52 +143,47 @@ def run_honeypot_flow(initial_message: str) -> Dict[str, Any]:
     conversation_log.append({"role": "system", "content": system_prompt})
     conversation_log.append({"role": "user", "content": initial_message})
 
-    # Simulated scammer responses (simple mock)
-    # In real hackathon, you might call their Mock Scammer API.
+    # Mock scammer replies (simulated)
     mock_scammer_msgs = [
         "Do it fast or account will be blocked",
         "Send your UPI to verify",
         "Use UPI scammer123@upi to verify",
         "Click https://fake-bank-verify.com/login to verify your KYC",
-        "Account number 123456789012 IFSC SBIN0001234"
+        "Account number 123456789012"
     ]
 
     extracted = {"upi_ids": [], "bank_accounts": [], "phishing_links": []}
 
     turns_taken = 0
     max_turns = 6
+    last_user_msg = initial_message
 
     # Agentic loop
-    last_user_msg = initial_message
     for t in range(1, max_turns + 1):
+
         # Agent reply
         agent_reply = generate_agent_reply(persona_used, scam_type, last_user_msg, t)
         conversation_log.append({"role": "assistant", "content": agent_reply})
 
-        # Mock scammer reply
+        # Scammer reply
         scammer_reply = mock_scammer_msgs[min(t - 1, len(mock_scammer_msgs) - 1)]
         conversation_log.append({"role": "user", "content": scammer_reply})
 
         turns_taken += 1
         last_user_msg = scammer_reply
 
-        # Extract intelligence from scammer message
+        # Extract intelligence
         intel = extract_intel(scammer_reply)
-
         for k in extracted:
             extracted[k].extend(intel[k])
-
-        # Deduplicate
-        for k in extracted:
             extracted[k] = list(sorted(set(extracted[k])))
 
-        # Stop early if we already got something valuable
-        if extracted["upi_ids"] or extracted["phishing_links"] or extracted["bank_accounts"]:
-            if t >= 3:
-                break
+        # Stop early if extracted something useful
+        if t >= 3 and (extracted["upi_ids"] or extracted["phishing_links"] or extracted["bank_accounts"]):
+            break
 
     # Final JSON
-    response = {
+    return {
         "scam_detected": scam_detected,
         "scam_type": scam_type,
         "persona_used": persona_used,
@@ -203,5 +192,3 @@ def run_honeypot_flow(initial_message: str) -> Dict[str, Any]:
         "extracted_intelligence": extracted,
         "conversation_log": conversation_log
     }
-
-    return response
