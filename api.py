@@ -1,66 +1,62 @@
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request, Form
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
-
-# Import honeypot logic
 from main import run_honeypot_flow
 
-app = FastAPI(
-    title="Agentic HoneyPot API",
-    version="1.0.0",
-    description="Agentic honeypot for scam detection and intelligence extraction"
-)
+app = FastAPI(title="Agentic Honey-Pot API")
 
-# API Key (Hackathon)
 API_KEY = "hackathon123"
 
 
-# -------------------------
-# Health Check
-# -------------------------
+# ---------- Pydantic Model ----------
+class ScamRequest(BaseModel):
+    message: str
+
+
+# ---------- Root ----------
 @app.get("/")
 def root():
-    return {
-        "status": "API is running",
-        "message": "Go to /docs for Swagger UI"
-    }
+    return {"status": "API is running", "message": "Go to /docs for Swagger UI"}
 
 
-# -------------------------
-# Request Model
-# -------------------------
-class ScamRequest(BaseModel):
-    message: Optional[str] = None
-    text: Optional[str] = None
-    input: Optional[str] = None
-
-
-# -------------------------
-# Main Endpoint
-# -------------------------
+# ---------- Honeypot Endpoint ----------
 @app.post("/agentic-honeypot")
-def agentic_honeypot(
-    req: Optional[ScamRequest] = None,
-    x_api_key: Optional[str] = Header(None)
+async def agentic_honeypot(
+    request: Request,
+    x_api_key: Optional[str] = Header(None),
+    message: Optional[str] = Form(None)  # <-- allows form-data
 ) -> Dict[str, Any]:
 
-    # 1️⃣ API key validation
+    # 1) API Key check
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    # 2️⃣ Extract message (supports multiple formats)
-    msg = None
-    if req:
-        msg = req.message or req.text or req.input
-
-    # 3️⃣ OFFICIAL TESTER FIX (no body sent)
-    if not msg or not msg.strip():
-        msg = "Your bank account is blocked. Click to verify."
-
-    # 4️⃣ Run honeypot logic
+    # 2) Try to read JSON
+    body_message = None
     try:
-        result = run_honeypot_flow(msg)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+        data = await request.json()
+        if isinstance(data, dict) and "message" in data:
+            body_message = data["message"]
+    except:
+        pass
 
+    # 3) If not JSON, try form-data
+    if body_message is None and message:
+        body_message = message
+
+    # 4) If still not, try query param
+    if body_message is None:
+        query_message = request.query_params.get("message")
+        if query_message:
+            body_message = query_message
+
+    # 5) If still not found, throw error
+    if not body_message:
+        raise HTTPException(
+            status_code=422,
+            detail="Missing 'message'. Send JSON {\"message\": \"...\"} or form-data message=..."
+        )
+
+    # 6) Run honeypot
+    result = run_honeypot_flow(body_message)
     return result
