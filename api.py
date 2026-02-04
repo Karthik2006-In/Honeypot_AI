@@ -1,17 +1,24 @@
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 
-from scam_detector import detect_scam, classify_scam
-from ai_agent import ai_reply
-from mock_scammer import mock_scammer_api
-from extractor import extract_upi, extract_links, extract_bank_accounts
-from config import PERSONAS
+# Import your existing honeypot flow function
+# IMPORTANT: main.py must contain run_honeypot_flow(message: str) -> dict
+from main import run_honeypot_flow
 
-# API key to share with evaluators
+app = FastAPI(
+    title="Agentic HoneyPot API",
+    version="1.0.0",
+    description="Agentic honeypot that detects scams, engages scammers, and extracts UPI IDs, bank accounts, and phishing links."
+)
+
+# Your hackathon API key
 API_KEY = "hackathon123"
 
-app = FastAPI(title="Agentic HoneyPot API")
+
+# ----------------------------
+# Health Check (IMPORTANT)
+# ----------------------------
 @app.get("/")
 def root():
     return {
@@ -19,72 +26,48 @@ def root():
         "message": "Go to /docs for Swagger UI"
     }
 
-class ScamRequest(BaseModel):
-    message: str
 
+# ----------------------------
+# Request Body Model
+# ----------------------------
+# Hackathon testers sometimes send different field names.
+# So we accept multiple possibilities:
+# - message
+# - text
+# - input
+class ScamRequest(BaseModel):
+    message: Optional[str] = None
+    text: Optional[str] = None
+    input: Optional[str] = None
+
+
+# ----------------------------
+# Main Endpoint
+# ----------------------------
 @app.post("/agentic-honeypot")
 def agentic_honeypot(
-    request: ScamRequest,
+    req: ScamRequest,
     x_api_key: Optional[str] = Header(None)
-):
-    # Authentication
+) -> Dict[str, Any]:
+
+    # 1) API Key Validation
     if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
-    # Scam detection
-    if not detect_scam(request.message):
-        return {"scam_detected": False}
+    # 2) Extract message from any supported field
+    msg = req.message or req.text or req.input
 
-    scam_type = classify_scam(request.message)
+    if not msg or not msg.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="INVALID_REQUEST_BODY: Provide 'message' or 'text' or 'input' in JSON body."
+        )
 
-    # Persona selection
-    def choose_persona(text):
-        if "bank" in text.lower():
-            return "senior_citizen"
-        if "upi" in text.lower():
-            return "shop_owner"
-        return "student"
+    # 3) Run your existing honeypot logic
+    try:
+        result = run_honeypot_flow(msg)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
-    persona_type = choose_persona(request.message)
-
-    conversation = [
-        {"role": "system", "content": PERSONAS[persona_type]},
-        {"role": "user", "content": request.message}
-    ]
-
-    upi_ids, links, banks = [], [], []
-
-    for turn in range(5):
-        ai_msg = ai_reply(conversation)
-        conversation.append({"role": "assistant", "content": ai_msg})
-
-        scammer_reply = mock_scammer_api(ai_msg)
-        conversation.append({"role": "user", "content": scammer_reply})
-
-        upi_ids += extract_upi(scammer_reply)
-        links += extract_links(scammer_reply)
-        banks += extract_bank_accounts(scammer_reply)
-
-        if upi_ids or links or banks:
-            break
-
-    threat_score = min(
-        (40 if upi_ids else 0) +
-        (40 if links else 0) +
-        (50 if banks else 0),
-        100
-    )
-
-    return {
-        "scam_detected": True,
-        "scam_type": scam_type,
-        "persona_used": persona_type,
-        "turns_taken": turn + 1,
-        "threat_score": threat_score,
-        "extracted_intelligence": {
-            "upi_ids": list(set(upi_ids)),
-            "bank_accounts": list(set(banks)),
-            "phishing_links": list(set(links))
-        },
-        "conversation_log": conversation
-    }
+    # 4) Return structured JSON
+    return result
