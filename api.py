@@ -12,6 +12,12 @@ from config import PERSONAS
 API_KEY = "hackathon123"
 
 app = FastAPI(title="Agentic HoneyPot API")
+@app.get("/")
+def root():
+    return {
+        "status": "API is running",
+        "message": "Go to /docs for Swagger UI"
+    }
 
 class ScamRequest(BaseModel):
     message: str
